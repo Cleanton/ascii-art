@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D ASCII Logo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #ffffff; overflow: hidden;
+  }
+  #ascii-canvas {
+    position: fixed; inset: 0; z-index: 10;
+    width: 100vw; height: 100vh;
+  }
+  #three-offscreen {
+    position: fixed; top: 0; left: 0;
+    visibility: hidden; pointer-events: none; z-index: -1;
+  }
+</style>
+</head>
+<body>
+<canvas id="ascii-canvas"></canvas>
+<div id="three-offscreen"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+  const ASCII_RAMP = '$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/|()1{}[]?-_+~<>i!lI;:,"^`. ';
+
+  const offscreenDiv = document.getElementById('three-offscreen');
+  const asciiCanvas = document.getElementById('ascii-canvas');
+  const asciiCtx = asciiCanvas.getContext('2d');
+
+  let scene, camera, renderer, logoGroup;
+  let mouse = { x: 0, y: 0, canvasX: -9999, canvasY: -9999 };
+  let tRX = 0, tRY = 0, cRX = 0, cRY = 0;
+
+  // Hardcoded settings
+  const sensitivity = 0.50;
+  const extrudeDepth = 100;
+  const asciiSize = 13;
+  const mouseRadius = 190;
+  const mouseForce = 16;
+  const spring = 0.12;
+  const friction = 0.79;
+  const scrollStrength = 1;
+
+  let particles = {};
+  let scrollImpulse = 0;
+
+  document.addEventListener('mousemove', e => {
+    mouse.x = (e.clientX / innerWidth) * 2 - 1;
+    mouse.y = -(e.clientY / innerHeight) * 2 + 1;
+    mouse.canvasX = e.clientX;
+    mouse.canvasY = e.clientY;
+  });
+  document.addEventListener('wheel', e => {
+    scrollImpulse += Math.abs(e.deltaY) * 0.015;
+    scrollImpulse = Math.min(scrollImpulse, 8);
+  }, { passive: true });
+
+  // ── Parse SVG path directly into THREE.Shape ──
+  function buildWebflowShape() {
+    // Original SVG viewBox: 0 0 172 164
+    // Path coordinates from the SVG
+    const svgW = 172, svgH = 164;
+    const modelScale = 1.3; // scale up for better visibility
+    const w = svgW * modelScale, h = svgH * modelScale;
+
+    // Raw path points extracted from the SVG d attribute, scaled and centered
+    // The Webflow logo path:
+    // M166.941 30.8501 L115.286 133.151 H66.7681 L88.3855 90.7528 H87.4156
+    // C69.5814 114.207 42.9724 129.646 5.05859 133.151 V91.3395
+    // C5.05859 91.3395 29.3129 89.8882 43.5714 74.7014 H5.05859
+    // V30.8508 H48.3428 V66.9173 L49.3144 66.9132 L67.0019 30.8508
+    // H99.7366 V66.6886 L100.708 66.687 L119.059 30.8501 H166.941 Z
+
+    const s = modelScale;
+    const cx = svgW / 2, cy = svgH / 2; // center offset
+
+    const tx = (x) => (x - cx) * s;
+    const ty = (y) => -(y - cy) * s; // flip Y for Three.js
+
+    const shape = new THREE.Shape();
+
+    // M166.941 30.8501
+    shape.moveTo(tx(166.941), ty(30.8501));
+    // L115.286 133.151
+    shape.lineTo(tx(115.286), ty(133.151));
+    // H66.7681 (lineTo with same Y)
+    shape.lineTo(tx(66.7681), ty(133.151));
+    // L88.3855 90.7528
+    shape.lineTo(tx(88.3855), ty(90.7528));
+    // H87.4156
+    shape.lineTo(tx(87.4156), ty(90.7528));
+    // C69.5814 114.207 42.9724 129.646 5.05859 133.151
+    shape.bezierCurveTo(
+      tx(69.5814), ty(114.207),
+      tx(42.9724), ty(129.646),
+      tx(5.05859), ty(133.151)
+    );
+    // V91.3395
+    shape.lineTo(tx(5.05859), ty(91.3395));
+    // C5.05859 91.3395 29.3129 89.8882 43.5714 74.7014
+    shape.bezierCurveTo(
+      tx(5.05859), ty(91.3395),
+      tx(29.3129), ty(89.8882),
+      tx(43.5714), ty(74.7014)
+    );
+    // H5.05859
+    shape.lineTo(tx(5.05859), ty(74.7014));
+    // V30.8508
+    shape.lineTo(tx(5.05859), ty(30.8508));
+    // H48.3428
+    shape.lineTo(tx(48.3428), ty(30.8508));
+    // V66.9173
+    shape.lineTo(tx(48.3428), ty(66.9173));
+    // L49.3144 66.9132
+    shape.lineTo(tx(49.3144), ty(66.9132));
+    // L67.0019 30.8508
+    shape.lineTo(tx(67.0019), ty(30.8508));
+    // H99.7366
+    shape.lineTo(tx(99.7366), ty(30.8508));
+    // V66.6886
+    shape.lineTo(tx(99.7366), ty(66.6886));
+    // L100.708 66.687
+    shape.lineTo(tx(100.708), ty(66.687));
+    // L119.059 30.8501
+    shape.lineTo(tx(119.059), ty(30.8501));
+    // H166.941 (close back to start X)
+    shape.lineTo(tx(166.941), ty(30.8501));
+
+    return { shape, modelW: w, modelH: h };
+  }
+
+  // ── Render SVG to canvas for ASCII color sampling ──
+  function renderSvgToCanvas(callback) {
+    const svgStr = `<svg width="172" height="164" viewBox="0 0 172 164" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M166.941 30.8501L115.286 133.151H66.7681L88.3855 90.7528H87.4156C69.5814 114.207 42.9724 129.646 5.05859 133.151V91.3395C5.05859 91.3395 29.3129 89.8882 43.5714 74.7014H5.05859V30.8508H48.3428V66.9173L49.3144 66.9132L67.0019 30.8508H99.7366V66.6886L100.708 66.687L119.059 30.8501H166.941Z" fill="black"/></svg>`;
+    const blob = new Blob([svgStr], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); callback(img); };
+    img.src = url;
+  }
+
+  function fitCamera(modelW, modelH) {
+    const vFov = camera.fov * Math.PI / 180;
+    const aspect = camera.aspect;
+    const distV = (modelH / 0.7 / 2) / Math.tan(vFov / 2);
+    const distH = (modelW / 0.7 / 2) / Math.tan(vFov / 2) / aspect;
+    camera.position.z = Math.max(distV, distH);
+  }
+
+  function init() {
+    // Three.js setup
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xffffff);
+    camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 3000);
+    camera.position.z = 400;
+    renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(1);
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    offscreenDiv.appendChild(renderer.domElement);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    const key = new THREE.DirectionalLight(0xffffff, 0.35);
+    key.position.set(100, 200, 400); scene.add(key);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.2);
+    fill.position.set(-100, -150, -300); scene.add(fill);
+    const rim = new THREE.DirectionalLight(0xffffff, 0.15);
+    rim.position.set(300, 0, 0); scene.add(rim);
+
+    asciiCanvas.width = innerWidth;
+    asciiCanvas.height = innerHeight;
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+      asciiCanvas.width = innerWidth;
+      asciiCanvas.height = innerHeight;
+      particles = {};
+      const { modelW, modelH } = buildWebflowShape();
+      fitCamera(modelW, modelH);
+    });
+
+    // Build the 3D shape from the SVG path directly
+    const { shape, modelW, modelH } = buildWebflowShape();
+    const depth = extrudeDepth * 0.5;
+
+    const frontColor = new THREE.Color(0.05, 0.05, 0.05);
+    const sideColor = frontColor.clone().lerp(new THREE.Color(1, 1, 1), 0.5);
+
+    const frontMat = new THREE.MeshStandardMaterial({ color: frontColor, roughness: 0.92, metalness: 0 });
+    const sideMat = new THREE.MeshStandardMaterial({ color: sideColor, roughness: 0.92, metalness: 0 });
+
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth,
+      bevelEnabled: true,
+      bevelThickness: 2,
+      bevelSize: 1.5,
+      bevelSegments: 3,
+      curveSegments: 12,
+    });
+    geo.computeBoundingBox();
+    geo.center();
+
+    logoGroup = new THREE.Group();
+    logoGroup.add(new THREE.Mesh(geo, [frontMat, sideMat]));
+    scene.add(logoGroup);
+
+    fitCamera(modelW, modelH);
+    animate();
+  }
+
+  // ── Particles ──
+  function getOrCreate(key, ox, oy) {
+    if (particles[key]) { particles[key].originX = ox; particles[key].originY = oy; return particles[key]; }
+    return particles[key] = { x: ox, y: oy, originX: ox, originY: oy, vx: 0, vy: 0 };
+  }
+
+  function updateParticles(cols, rows, cellW, cellH) {
+    const mX = mouse.canvasX, mY = mouse.canvasY;
+    const r2 = mouseRadius * mouseRadius;
+    const activeKeys = new Set();
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const key = col + row * 10000; activeKeys.add(key);
+        const ox = col * cellW, oy = row * cellH;
+        const p = getOrCreate(key, ox, oy);
+        const dx = p.x - mX, dy = p.y - mY;
+        const distSq = dx * dx + dy * dy;
+        if (distSq < r2 && distSq > 0.1) {
+          const dist = Math.sqrt(distSq);
+          const f = (mouseRadius - dist) / mouseRadius;
+          const str = f * f * mouseForce;
+          const ang = Math.atan2(dy, dx);
+          p.vx += Math.cos(ang) * str;
+          p.vy += Math.sin(ang) * str;
+        }
+        if (scrollImpulse > 0.1) {
+          const ang = Math.random() * Math.PI * 2;
+          p.vx += Math.cos(ang) * scrollImpulse * scrollStrength * (0.5 + Math.random());
+          p.vy += Math.sin(ang) * scrollImpulse * scrollStrength * (0.5 + Math.random());
+        }
+        p.vx += (p.originX - p.x) * spring;
+        p.vy += (p.originY - p.y) * spring;
+        p.vx *= friction; p.vy *= friction;
+        p.x += p.vx; p.y += p.vy;
+      }
+    }
+    scrollImpulse *= 0.85;
+    if (scrollImpulse < 0.05) scrollImpulse = 0;
+    for (const key in particles) if (!activeKeys.has(+key)) delete particles[key];
+  }
+
+  // ── Animate ──
+  function animate() {
+    requestAnimationFrame(animate);
+    if (!logoGroup || !renderer) return;
+
+    tRY = mouse.x * sensitivity * Math.PI * 0.5;
+    tRX = -mouse.y * sensitivity * Math.PI * 0.5;
+    cRX += (tRX - cRX) * 0.06;
+    cRY += (tRY - cRY) * 0.06;
+    logoGroup.rotation.x = cRX;
+    logoGroup.rotation.y = cRY;
+
+    renderer.render(scene, camera);
+
+    const w = renderer.domElement.width, h = renderer.domElement.height;
+    const fontSize = asciiSize;
+    const cellW = Math.ceil(fontSize * 0.62), cellH = fontSize;
+    const cols = Math.floor(w / cellW), rows = Math.floor(h / cellH);
+
+    const sc = document.createElement('canvas');
+    sc.width = cols; sc.height = rows;
+    const sx = sc.getContext('2d');
+    sx.drawImage(renderer.domElement, 0, 0, cols, rows);
+    const pixels = sx.getImageData(0, 0, cols, rows).data;
+
+    updateParticles(cols, rows, cellW, cellH);
+
+    asciiCtx.clearRect(0, 0, asciiCanvas.width, asciiCanvas.height);
+    asciiCtx.font = `bold ${fontSize}px "Courier New", monospace`;
+    asciiCtx.textBaseline = 'top';
+
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const i = (row * cols + col) * 4;
+        const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+        const brightness = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
+        if (brightness > 0.95) continue;
+        const charIdx = Math.floor(brightness * (ASCII_RAMP.length - 1));
+        const ch = ASCII_RAMP[charIdx];
+        if (ch === ' ') continue;
+        const key = col + row * 10000;
+        const p = particles[key];
+        asciiCtx.fillStyle = `rgb(${r},${g},${b})`;
+        asciiCtx.fillText(ch, p ? p.x : col * cellW, p ? p.y : row * cellH);
+      }
+    }
+  }
+
+  // Start
+  init();
+})();
+</script>
+</body>
+</html>
